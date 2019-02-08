@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <sys/stat.h>
 
 #include <cstdio>
@@ -320,6 +322,7 @@ struct AuthTokenIssuingTestParams {
   const string rpc_encryption;
   const bool rpc_encrypt_loopback_connections;
   const bool authn_token_present;
+  const bool force_external_client_ip;
 };
 class AuthTokenIssuingTest :
     public SecurityITest,
@@ -327,23 +330,24 @@ class AuthTokenIssuingTest :
 };
 INSTANTIATE_TEST_CASE_P(, AuthTokenIssuingTest, ::testing::ValuesIn(
     vector<AuthTokenIssuingTestParams>{
-      { BindMode::LOOPBACK, "required", "required", true,  true,  },
-      { BindMode::LOOPBACK, "required", "required", false, true,  },
+      { BindMode::LOOPBACK, "required", "required", true,  true,  false, },
+      { BindMode::LOOPBACK, "required", "required", false, true,  false, },
       //BindMode::LOOPBACK, "required", "disabled": non-acceptable
       //BindMode::LOOPBACK, "required", "disabled": non-acceptable
-      { BindMode::LOOPBACK, "disabled", "required", true,  true,  },
-      { BindMode::LOOPBACK, "disabled", "required", false, true,  },
-      { BindMode::LOOPBACK, "disabled", "disabled", true,  false, },
-      { BindMode::LOOPBACK, "disabled", "disabled", false, true,  },
+      { BindMode::LOOPBACK, "disabled", "required", true,  true,  false, },
+      { BindMode::LOOPBACK, "disabled", "required", false, true,  false, },
+      { BindMode::LOOPBACK, "disabled", "disabled", true,  false, false, },
+      { BindMode::LOOPBACK, "disabled", "disabled", false, true,  false, },
 #if defined(__linux__)
-      { BindMode::UNIQUE_LOOPBACK, "required", "required", true,  true,  },
-      { BindMode::UNIQUE_LOOPBACK, "required", "required", false, true,  },
+      { BindMode::UNIQUE_LOOPBACK, "required", "required", true,  true,  false,  },
+      { BindMode::UNIQUE_LOOPBACK, "required", "required", false, true,  false, },
       //BindMode::UNIQUE_LOOPBACK, "required", "disabled": non-acceptable
       //BindMode::UNIQUE_LOOPBACK, "required", "disabled": non-acceptable
-      { BindMode::UNIQUE_LOOPBACK, "disabled", "required", true,  true,  },
-      { BindMode::UNIQUE_LOOPBACK, "disabled", "required", false, true,  },
-      { BindMode::UNIQUE_LOOPBACK, "disabled", "disabled", true,  false, },
-      { BindMode::UNIQUE_LOOPBACK, "disabled", "disabled", false, false, },
+      { BindMode::UNIQUE_LOOPBACK, "disabled", "required", true,  true,  false, },
+      { BindMode::UNIQUE_LOOPBACK, "disabled", "required", false, true,  false, },
+      { BindMode::UNIQUE_LOOPBACK, "disabled", "disabled", true,  false, false, },
+      { BindMode::UNIQUE_LOOPBACK, "disabled", "disabled", false, false, true,  },
+      { BindMode::UNIQUE_LOOPBACK, "disabled", "disabled", false, true, false,  },
 #endif
     }
 ));
@@ -368,11 +372,35 @@ TEST_P(AuthTokenIssuingTest, ChannelConfidentiality) {
                  params.rpc_encrypt_loopback_connections));
   ASSERT_OK(StartCluster());
 
-  // Make sure the client always connects from the standard loopback address.
-  // This is crucial when the master is running with UNIQUE_LOOPBACK mode: the
-  // test scenario expects the client connects from other than 127.0.0.1 address
-  // so the connection is not considered a 'loopback' one.
-  FLAGS_local_ip_for_outbound_sockets = "127.0.0.1";
+  // When testing external connections, make sure the client connects from
+  // an extnernal IP, so that the connection is not considered  to be local
+  if (params.force_external_client_ip) {
+    struct ifaddrs *ifap = nullptr;
+    bool have_external_ip = false; 
+    if (getifaddrs(&ifap) > -1) {
+      for (struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr || ifa->ifa_netmask == nullptr || ifa->ifa_addr->sa_family != AF_INET) continue;
+        struct sockaddr_in *addr_in = (struct sockaddr_in *)ifa->ifa_addr; 
+        if ((NetworkByteOrder::FromHost32(addr_in->sin_addr.s_addr) >> 24) != 127) {
+          have_external_ip = true;
+          char s[INET_ADDRSTRLEN];
+          inet_ntop(AF_INET, &(addr_in->sin_addr), s, INET_ADDRSTRLEN); 
+          FLAGS_local_ip_for_outbound_sockets.assign(s, INET_ADDRSTRLEN);
+          break;
+        }
+      }
+    }
+    if (!have_external_ip) {
+      // Skip tests that require an external connection
+      // if the host does not have a non-loopback interface
+      LOG(WARNING) << "Skipping external connection test, because the host does not have an external network interface.";
+      return;
+    }
+  } else {
+    // When testing local connections, make sure that the client
+    // connects from standard loopback IP
+    FLAGS_local_ip_for_outbound_sockets = "127.0.0.1";
+  } 
 
   // In current implementation, KuduClientBuilder calls ConnectToCluster() on
   // the newly created instance of the KuduClient.
