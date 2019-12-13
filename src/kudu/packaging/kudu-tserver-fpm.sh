@@ -1,0 +1,1 @@
+fpm -s dir -t deb -n kudu-tserver -v 1.11.1 --deb-user kudu --after-install ../../src/kudu/packaging/kudu-tserver-postinst.sh --config-files ../../src/kudu/packaging/kudu-tserver-flagfile ../../src/kudu/packaging/kudu-tserver-flagfile=/var/run/kudu-tserver/gflagfile bin/kudu-tserver=/usr/local/sbin/

@@ -1,0 +1,11 @@
+-default_num_replicas=3
+-fs_data_dirs=/opt/kudu/tserver/data
+-fs_wal_dir=/opt/kudu/tserver/wal
+-fs_metadata_dir=/opt/kudu/tserver/metadata
+-log_dir=/var/log/kudu
+-log_force_fsync_all=false
+-logbuflevel=0
+-max_log_size=1800
+-minloglevel=0
+-webserver_port=8051
+-block_manager=file
